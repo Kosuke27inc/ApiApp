@@ -1,65 +1,158 @@
-//
-//  ApiViewController.swift
-//  ApiApp
-//
-//  Created by Kosuke Miyazaki on 2024/05/02.
-//
-
 import UIKit
 import Alamofire
 import AlamofireImage
 import RealmSwift
-
-struct Shop {
-    let id: String
-    let name: String
-    let logo_image: String
-    let coupon_urls: ApiResponse.Result.Shop.CouponUrls
-    var isFavorite: Bool
-    
-    init(apiShop: ApiResponse.Result.Shop, isFavorite: Bool) {
-        self.id = apiShop.id
-        self.name = apiShop.name
-        self.logo_image = apiShop.logo_image
-        self.coupon_urls = apiShop.coupon_urls
-        self.isFavorite = isFavorite
-    }
-}
+import SafariServices
 
 class ApiViewController: UIViewController, UITableViewDelegate, UITableViewDataSource {
-    @IBOutlet weak var statusLabel: UILabel!
+
     @IBOutlet weak var tableView: UITableView!
-    
+    @IBOutlet weak var statusLabel: UILabel!
+
     let realm = try! Realm()
-    var shopArray: [Shop] = []
+
+    var shopArray: [ApiResponse.Result.Shop] = []
+
     var apiKey: String = ""
-    
+
+    var isLoading = false
+    var isLastLoaded = false
+
     override func viewDidLoad() {
         super.viewDidLoad()
-        
+
         tableView.delegate = self
         tableView.dataSource = self
-        
+
+        // APIキー読み込み
         let filePath = Bundle.main.path(forResource: "ApiKey", ofType:"plist" )
         let plist = NSDictionary(contentsOfFile: filePath!)!
         apiKey = plist["key"] as! String
-        
+
+        // shopArray読み込み
         updateShopArray()
-        
+
+        // RefreshControlの設定
         let refreshControl = UIRefreshControl()
         refreshControl.addTarget(self, action: #selector(refresh), for: .valueChanged)
         tableView.refreshControl = refreshControl
     }
-    
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+
+        tableView.reloadData()
+    }
+
     @objc func refresh() {
+        // shopArray再読み込み
         updateShopArray()
     }
-    
+
+    func updateShopArray(appendLoad: Bool = false) {
+        // 現在読み込み中なら読み込みを開始しない
+        if isLoading {
+            return
+        }
+        // 最後まで読み込んでいるなら、追加読み込みしない
+        if appendLoad && isLastLoaded {
+            return
+        }
+        // 読み込み開始位置を設定
+        let startIndex: Int
+        if appendLoad {
+            startIndex = shopArray.count + 1
+        } else {
+            startIndex = 1
+        }
+        // 読み込み中状態開始
+        isLoading = true
+
+        let parameters: [String: Any] = [
+            "key": apiKey,
+            "start": startIndex,
+            "count": 20,
+            "keyword": "ランチ",
+            "format": "json"
+        ]
+        print("APIリクエスト 開始位置: \(parameters["start"]!) 読み込み店舗数: \(parameters["count"]!)")
+        AF.request("https://webservice.recruit.co.jp/hotpepper/gourmet/v1/", method: .get, parameters: parameters).responseDecodable(of: ApiResponse.self) { response in
+            // 読み込み中状態終了
+            self.isLoading = false
+            // リフレッシュ表示動作停止
+            if self.tableView.refreshControl!.isRefreshing {
+                self.tableView.refreshControl!.endRefreshing()
+            }
+            // レスポンス受信処理
+            switch response.result {
+            case .success(let apiResponse):
+                // print("受信データ: \(apiResponse)")
+                print("受信店舗数: \(apiResponse.results.shop.count)")
+                if appendLoad {
+                    // 追加読み込みの場合は、現在のshopArrayに追加
+                    self.shopArray += apiResponse.results.shop
+                } else {
+                    // 追加読み込みでない場合はそのまま代入し、isLastLoadedをリセット
+                    self.shopArray = apiResponse.results.shop
+                    self.isLastLoaded = false
+                }
+                // 読み込み数が0なら最後まで読み込まれたと判断
+                if apiResponse.results.shop.count == 0 {
+                    self.isLastLoaded = true
+                }
+                self.statusLabel.text = ""
+            case .failure(let error):
+                print(error)
+                self.shopArray = []
+                self.isLastLoaded = true
+                self.statusLabel.text = "データの取得が失敗しました"
+            }
+            self.tableView.reloadData()
+        }
+    }
+
+    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        return shopArray.count
+    }
+
+    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "Cell", for: indexPath) as! ShopCell
+        let shop = shopArray[indexPath.row]
+        let url = URL(string: shop.logo_image)!
+        cell.logoImageView.af.setImage(withURL: url)
+        cell.shopNameLabel.text = shop.name
+        let starImageName = shop.isFavorite ? "star.fill" : "star"
+        let starImage = UIImage(systemName: starImageName)?.withRenderingMode(.alwaysOriginal)
+        cell.favoriteButton.setImage(starImage, for: .normal)
+
+        // 追加データの読み込みが必要か確認
+        if shopArray.count - indexPath.row < 10 {
+            self.updateShopArray(appendLoad: true)
+        }
+
+        return cell
+    }
+
+    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: false)
+        let shop = shopArray[indexPath.row]
+        let urlString: String
+        if shop.coupon_urls.sp == "" {
+            urlString = shop.coupon_urls.pc
+        } else {
+            urlString = shop.coupon_urls.sp
+        }
+        let url = URL(string: urlString)!
+        let safariViewController = SFSafariViewController(url: url)
+        safariViewController.modalPresentationStyle = .pageSheet
+        present(safariViewController, animated: true)
+    }
+
     @IBAction func tapFavoriteButton(_ sender: UIButton) {
         let point = sender.convert(CGPoint.zero, to: tableView)
         let indexPath = tableView.indexPathForRow(at: point)!
         let shop = shopArray[indexPath.row]
-        
+
         if shop.isFavorite {
             print("「\(shop.name)」をお気に入りから削除します")
             try! realm.write {
@@ -83,53 +176,6 @@ class ApiViewController: UIViewController, UITableViewDelegate, UITableViewDataS
         }
         tableView.reloadData()
     }
-    
-    func updateShopArray() {
-        let parameters: [String: Any] = [
-            "key": apiKey,
-            "start": 1,
-            "count": 20,
-            "keyword": "ランチ",
-            "format": "json"
-        ]
-        
-        AF.request("https://webservice.recruit.co.jp/hotpepper/gourmet/v1/", method: .get, parameters: parameters).responseDecodable(of: ApiResponse.self) { response in
-            if self.tableView.refreshControl!.isRefreshing {
-                self.tableView.refreshControl!.endRefreshing()
-            }
-            
-            switch response.result {
-            case .success(let apiResponse):
-                print("受信データ: \(apiResponse)")
-                self.shopArray = apiResponse.results.shop.map { apiShop in
-                    let isFavorite = self.realm.object(ofType: FavoriteShop.self, forPrimaryKey: apiShop.id) != nil
-                    return Shop(apiShop: apiShop, isFavorite: isFavorite)
-                }
-                self.statusLabel.text = ""
-            case .failure(let error):
-                print(error)
-                self.shopArray = []
-                self.statusLabel.text = "データの取得が失敗しました"
-            }
-            self.tableView.reloadData()
-        }
-    }
-    
-    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        return shopArray.count
-    }
-    
-    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: "Cell", for: indexPath) as! ShopCell
-        let shop = shopArray[indexPath.row]
-        let url = URL(string: shop.logo_image)!
-        cell.logoImageView.af.setImage(withURL: url)
-        cell.shopNameLabel.text = shop.name
-        
-        let starImageName = shop.isFavorite ? "star.fill" : "star"
-        let starImage = UIImage(systemName: starImageName)?.withRenderingMode(.alwaysOriginal)
-        cell.favoriteButton.setImage(starImage, for: .normal)
-        
-        return cell
-    }
+
 }
+
