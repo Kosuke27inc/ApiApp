@@ -54,7 +54,6 @@ class FavoriteViewController: UIViewController, UITableViewDelegate, UITableView
     
     @IBOutlet weak var tableView: UITableView!
     @IBOutlet weak var statusLabel: UILabel!
-    
     let realm = try! Realm()
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -88,7 +87,7 @@ class FavoriteViewController: UIViewController, UITableViewDelegate, UITableView
         let url = URL(string: favoriteShop.logoImageURL)!
         cell.logoImageView.af.setImage(withURL: url)
         cell.shopNameLabel.text = favoriteShop.name
-        
+        cell.addressLabel.text = favoriteShop.address  // ここを修正
         return cell
     }
     // ここまで追加
